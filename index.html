@@ -1,0 +1,659 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Fold — Loyalty, Carried</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@18.3.1",
+    "react/": "https://esm.sh/react@18.3.1/",
+    "react-dom": "https://esm.sh/react-dom@18.3.1",
+    "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
+    "qrcode": "https://esm.sh/qrcode@1.5.3"
+  }
+}
+</script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  html, body { background: #0A0C10; margin: 0; font-family: 'Inter', sans-serif; }
+  .font-display { font-family: 'Space Grotesk', sans-serif; }
+  .tabular { font-variant-numeric: tabular-nums; }
+  #loading { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; }
+  .fold-icon { width: 36px; height: 24px; border-radius: 5px; background: linear-gradient(135deg, #B08968, #8F6B4E);
+    animation: cardFlip 1.15s cubic-bezier(0.65, 0, 0.35, 1) infinite; }
+  @keyframes cardFlip {
+    0%, 15% { transform: perspective(300px) rotateY(0deg); }
+    50% { transform: perspective(300px) rotateY(180deg); }
+    85%, 100% { transform: perspective(300px) rotateY(360deg); }
+  }
+  .loading-text { color: #B08968; font-family: 'Space Grotesk', sans-serif; font-size: 12px; letter-spacing: 0.15em; }
+  .loading-dot { display: inline-block; animation: dotPulse 1.15s ease-in-out infinite; opacity: 0.25; }
+  .loading-dot:nth-child(2) { animation-delay: 0.15s; }
+  .loading-dot:nth-child(3) { animation-delay: 0.3s; }
+  @keyframes dotPulse { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }
+  @keyframes unfold {
+    0% { transform: perspective(1000px) rotateX(-90deg); opacity: 0; }
+    60% { transform: perspective(1000px) rotateX(10deg); opacity: 1; }
+    100% { transform: perspective(1000px) rotateX(0deg); opacity: 1; }
+  }
+  .animate-unfold { animation: unfold 0.7s cubic-bezier(0.16, 1, 0.3, 1) both; transform-origin: top center; }
+  @keyframes riseFade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+  .animate-rise { animation: riseFade 0.3s ease both; }
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-thumb { background: #22303A; border-radius: 3px; }
+</style>
+</head>
+<body>
+<div id="loading">
+  <div class="fold-icon"></div>
+  <div class="loading-text">UNFOLDING<span class="loading-dot">.</span><span class="loading-dot">.</span><span class="loading-dot">.</span></div>
+</div>
+<div id="root"></div>
+
+<script type="text/babel" data-type="module" data-presets="react">
+import React, { useState, useEffect, useMemo, useRef } from "react";
+import ReactDOM from "react-dom/client";
+import QRCode from "qrcode";
+
+const POINTS_PER_AED_EARNED = 1;
+const POINTS_PER_AED_REDEEM = 20;
+const REDEEM_THRESHOLD = 2000;
+const REFERRAL_BONUS = 50;
+const BIRTHDAY_BONUS = 100;
+const SHARE_DAILY_LIMIT = 3;
+const TOPUP_BONUS_TIERS = [
+  { min: 200, bonusPct: 0.15 },
+  { min: 100, bonusPct: 0.10 },
+  { min: 50, bonusPct: 0.05 },
+];
+const TIERS = [
+  { name: "Gold", min: 3000, ring: "#D4AF6A", glow: "rgba(212,175,106,0.35)" },
+  { name: "Silver", min: 1000, ring: "#B8C0CC", glow: "rgba(184,192,204,0.30)" },
+  { name: "Bronze", min: 0, ring: "#C68B59", glow: "rgba(198,139,89,0.30)" },
+];
+function tierFor(lifetimeValue) {
+  return TIERS.find((t) => lifetimeValue >= t.min) || TIERS[TIERS.length - 1];
+}
+function topupBonusPct(amount) {
+  const match = TOPUP_BONUS_TIERS.find((t) => amount >= t.min);
+  return match ? match.bonusPct : 0;
+}
+function money(n) { return (n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function fmtDate(d) { return new Date(d).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }); }
+function fmtDateTime(d) { return new Date(d).toLocaleString(); }
+function nextFoldId(existing) {
+  const n = existing.length + 1;
+  return "FOLD-" + String(n).padStart(5, "0");
+}
+
+const STORE_KEY = "fold_v1_members";
+const PIN_KEY = "fold_v1_staffpin";
+function loadMembers() {
+  try {
+    const raw = localStorage.getItem(STORE_KEY);
+    if (!raw) return [];
+    return JSON.parse(raw);
+  } catch { return []; }
+}
+function saveMembers(members) {
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(members)); } catch {}
+}
+function loadPin() {
+  try { return localStorage.getItem(PIN_KEY) || "1234"; } catch { return "1234"; }
+}
+function savePin(pin) {
+  try { localStorage.setItem(PIN_KEY, pin); } catch {}
+}
+
+export default function FoldApp() {
+  const [members, setMembers] = useState(() => loadMembers());
+  const [staffPin, setStaffPin] = useState(() => loadPin());
+  const [mode, setMode] = useState(null);
+
+  useEffect(() => { saveMembers(members); }, [members]);
+  useEffect(() => { savePin(staffPin); }, [staffPin]);
+
+  function log(member, text) {
+    return { ...member, history: [{ t: new Date().toISOString(), text }, ...member.history] };
+  }
+
+  function enroll({ name, phone, birthday, referredBy }) {
+    const id = nextFoldId(members);
+    const member = {
+      id, name, phone, birthday: birthday || null, points: 0, lifetimeValue: 0,
+      referredBy: referredBy || null, lastBirthdayBonusYear: null, sharesSentToday: 0, sharesResetDate: new Date().toDateString(),
+      createdAt: new Date().toISOString(), history: [{ t: new Date().toISOString(), text: "Joined Fold" }],
+    };
+    let next = [...members, member];
+    if (referredBy) {
+      next = next.map((m) => m.id === referredBy
+        ? log({ ...m, points: m.points + REFERRAL_BONUS }, `Referral bonus — ${name} joined using your code — +${REFERRAL_BONUS} pts`)
+        : m);
+    }
+    setMembers(next);
+    return member;
+  }
+
+  function recordPurchase(id, amount) {
+    setMembers((prev) => prev.map((m) => {
+      if (m.id !== id) return m;
+      const earned = Math.round(amount * POINTS_PER_AED_EARNED);
+      const newLifetime = m.lifetimeValue + amount;
+      const oldTier = tierFor(m.lifetimeValue).name;
+      const newTier = tierFor(newLifetime).name;
+      let updated = { ...m, points: m.points + earned, lifetimeValue: newLifetime };
+      updated = log(updated, `Purchase recorded — ${money(amount)} AED — +${earned} pts`);
+      if (newTier !== oldTier) updated = log(updated, `Reached ${newTier} tier`);
+      return updated;
+    }));
+  }
+
+  function redeemPoints(id, aedValue) {
+    setMembers((prev) => prev.map((m) => {
+      if (m.id !== id) return m;
+      const needed = Math.ceil(aedValue * POINTS_PER_AED_REDEEM);
+      if (needed > m.points) return m;
+      return log({ ...m, points: m.points - needed }, `Redeemed ${needed} pts for ${money(aedValue)} AED off`);
+    }));
+  }
+
+  function topUp(id, amount) {
+    setMembers((prev) => prev.map((m) => {
+      if (m.id !== id) return m;
+      const bonusPct = topupBonusPct(amount);
+      const basePoints = Math.round(amount * POINTS_PER_AED_EARNED);
+      const bonusPoints = Math.round(basePoints * bonusPct);
+      const total = basePoints + bonusPoints;
+      return log({ ...m, points: m.points + total }, bonusPct > 0
+        ? `Topped up ${money(amount)} AED — +${basePoints} pts +${bonusPoints} bonus (${Math.round(bonusPct * 100)}%)`
+        : `Topped up ${money(amount)} AED — +${basePoints} pts`);
+    }));
+  }
+
+  function shareToday(m) {
+    const today = new Date().toDateString();
+    return m.sharesResetDate === today ? m.sharesSentToday : 0;
+  }
+  function sharePoints(fromId, toId, amount) {
+    setMembers((prev) => {
+      const from = prev.find((m) => m.id === fromId);
+      if (!from || from.points < amount) return prev;
+      const sentToday = shareToday(from);
+      if (sentToday >= SHARE_DAILY_LIMIT) return prev;
+      const today = new Date().toDateString();
+      return prev.map((m) => {
+        if (m.id === fromId) {
+          return log({ ...m, points: m.points - amount, sharesSentToday: sentToday + 1, sharesResetDate: today }, `Sent ${amount} pts to ${prev.find((x) => x.id === toId)?.name || toId}`);
+        }
+        if (m.id === toId) {
+          return log({ ...m, points: m.points + amount }, `Received ${amount} pts from ${from.name}`);
+        }
+        return m;
+      });
+    });
+  }
+
+  useEffect(() => {
+    const now = new Date();
+    setMembers((prev) => prev.map((m) => {
+      if (!m.birthday) return m;
+      const b = new Date(m.birthday);
+      const isToday = b.getMonth() === now.getMonth() && b.getDate() === now.getDate();
+      if (isToday && m.lastBirthdayBonusYear !== now.getFullYear()) {
+        return log({ ...m, points: m.points + BIRTHDAY_BONUS, lastBirthdayBonusYear: now.getFullYear() }, `Happy Birthday! +${BIRTHDAY_BONUS} bonus pts`);
+      }
+      return m;
+    }));
+  }, []);
+
+  const ctx = { members, setMembers, staffPin, setStaffPin, enroll, recordPurchase, redeemPoints, topUp, sharePoints, shareToday };
+
+  if (!mode) return <Landing onChoose={setMode} />;
+  if (mode === "customer") return <CustomerView ctx={ctx} onBack={() => setMode(null)} />;
+  return <StaffView ctx={ctx} onBack={() => setMode(null)} />;
+}
+
+function Wordmark({ size = "text-2xl" }) {
+  return (
+    <div className={`font-display font-bold tracking-[0.15em] ${size}`}>
+      <span className="text-white">FOL</span><span style={{ color: "#B08968" }}>D</span>
+    </div>
+  );
+}
+
+function Landing({ onChoose }) {
+  return (
+    <div className="min-h-screen flex flex-col items-center justify-center p-6 text-center">
+      <div className="mb-10 animate-rise">
+        <Wordmark size="text-4xl" />
+        <p className="text-[#6B7686] text-sm mt-2 tracking-wide">Loyalty, carried — independent of whatever till you use.</p>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full max-w-md">
+        <button onClick={() => onChoose("customer")}
+          className="group bg-[#12151C] border border-[#1D222C] hover:border-[#B08968]/50 rounded-2xl p-6 text-left transition-colors">
+          <div className="text-3xl mb-3">💳</div>
+          <div className="text-white font-semibold">I'm a Member</div>
+          <div className="text-[#6B7686] text-xs mt-1">View your card, points, and QR code</div>
+        </button>
+        <button onClick={() => onChoose("staff")}
+          className="group bg-[#12151C] border border-[#1D222C] hover:border-[#B08968]/50 rounded-2xl p-6 text-left transition-colors">
+          <div className="text-3xl mb-3">🧾</div>
+          <div className="text-white font-semibold">I'm Staff</div>
+          <div className="text-[#6B7686] text-xs mt-1">Look up a member, record a purchase or redemption</div>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function CustomerView({ ctx, onBack }) {
+  const { members, enroll } = ctx;
+  const [lookup, setLookup] = useState("");
+  const [found, setFound] = useState(null);
+  const [showEnroll, setShowEnroll] = useState(false);
+
+  function search() {
+    const q = lookup.trim().toLowerCase();
+    const match = members.find((m) => m.phone.replace(/\s/g, "") === q.replace(/\s/g, "") || m.id.toLowerCase() === q);
+    setFound(match || "notfound");
+  }
+
+  if (found && found !== "notfound") {
+    return <MemberCard member={members.find((m) => m.id === found.id) || found} onBack={() => setFound(null)} onAllBack={onBack} />;
+  }
+
+  return (
+    <div className="min-h-screen p-6 flex flex-col items-center">
+      <div className="w-full max-w-sm">
+        <button onClick={onBack} className="text-[#6B7686] text-xs mb-6">← Back</button>
+        <Wordmark />
+        <p className="text-[#6B7686] text-sm mt-2 mb-6">Find your card by phone number or Fold ID.</p>
+
+        {!showEnroll ? (
+          <div className="space-y-3">
+            <input value={lookup} onChange={(e) => setLookup(e.target.value)} onKeyDown={(e) => e.key === "Enter" && search()}
+              placeholder="Phone number or FOLD-00001"
+              className="w-full bg-[#12151C] border border-[#1D222C] rounded-xl px-4 py-3 text-white placeholder-[#4A5262] focus:outline-none focus:border-[#B08968]/60" />
+            <button onClick={search} className="w-full bg-[#B08968] hover:bg-[#8F6B4E] text-[#0A0C10] font-semibold py-3 rounded-xl">
+              Find My Card
+            </button>
+            {found === "notfound" && (
+              <div className="text-rose-400 text-xs text-center">No card matches that — check the number, or join below.</div>
+            )}
+            <button onClick={() => setShowEnroll(true)} className="w-full text-[#B08968] text-sm py-2">
+              New here? Join Fold
+            </button>
+          </div>
+        ) : (
+          <EnrollForm ctx={ctx} onDone={(m) => setFound(m)} onCancel={() => setShowEnroll(false)} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function EnrollForm({ ctx, onDone, onCancel }) {
+  const [form, setForm] = useState({ name: "", phone: "", birthday: "", referredBy: "" });
+  const [error, setError] = useState("");
+
+  function submit() {
+    if (!form.name.trim() || !form.phone.trim()) { setError("Name and phone are required."); return; }
+    if (ctx.members.some((m) => m.phone.replace(/\s/g, "") === form.phone.replace(/\s/g, ""))) {
+      setError("That phone number is already on a card.");
+      return;
+    }
+    const referrer = form.referredBy.trim() ? ctx.members.find((m) => m.id.toLowerCase() === form.referredBy.trim().toLowerCase()) : null;
+    if (form.referredBy.trim() && !referrer) { setError("That referral Fold ID wasn't found — leave it blank to skip."); return; }
+    const member = ctx.enroll({ name: form.name.trim(), phone: form.phone.trim(), birthday: form.birthday || null, referredBy: referrer?.id || null });
+    onDone(member);
+  }
+
+  return (
+    <div className="space-y-3 animate-rise">
+      <input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} placeholder="Full name"
+        className="w-full bg-[#12151C] border border-[#1D222C] rounded-xl px-4 py-3 text-white placeholder-[#4A5262] focus:outline-none focus:border-[#B08968]/60" />
+      <input value={form.phone} onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))} placeholder="Phone number"
+        className="w-full bg-[#12151C] border border-[#1D222C] rounded-xl px-4 py-3 text-white placeholder-[#4A5262] focus:outline-none focus:border-[#B08968]/60" />
+      <input type="date" value={form.birthday} onChange={(e) => setForm((f) => ({ ...f, birthday: e.target.value }))}
+        className="w-full bg-[#12151C] border border-[#1D222C] rounded-xl px-4 py-3 text-white placeholder-[#4A5262] focus:outline-none focus:border-[#B08968]/60" />
+      <input value={form.referredBy} onChange={(e) => setForm((f) => ({ ...f, referredBy: e.target.value }))} placeholder="Referred by (Fold ID, optional)"
+        className="w-full bg-[#12151C] border border-[#1D222C] rounded-xl px-4 py-3 text-white placeholder-[#4A5262] focus:outline-none focus:border-[#B08968]/60" />
+      {error && <div className="text-rose-400 text-xs">{error}</div>}
+      <div className="flex gap-2">
+        <button onClick={onCancel} className="flex-1 bg-[#12151C] border border-[#1D222C] text-[#6B7686] py-3 rounded-xl">Cancel</button>
+        <button onClick={submit} className="flex-1 bg-[#B08968] hover:bg-[#8F6B4E] text-[#0A0C10] font-semibold py-3 rounded-xl">Join</button>
+      </div>
+    </div>
+  );
+}
+
+function MemberCard({ member, onBack, onAllBack }) {
+  const tier = tierFor(member.lifetimeValue);
+  const [qrUrl, setQrUrl] = useState(null);
+  const [showHistory, setShowHistory] = useState(false);
+
+  useEffect(() => {
+    QRCode.toDataURL(member.id, { width: 260, margin: 1, color: { dark: "#0A0C10", light: "#FFFFFF" } }).then(setQrUrl);
+  }, [member.id]);
+
+  const redeemableAed = member.points / POINTS_PER_AED_REDEEM;
+
+  return (
+    <div className="min-h-screen p-6 flex flex-col items-center">
+      <div className="w-full max-w-sm">
+        <div className="flex justify-between items-center mb-6">
+          <button onClick={onBack} className="text-[#6B7686] text-xs">← Search again</button>
+          <button onClick={onAllBack} className="text-[#6B7686] text-xs">Home</button>
+        </div>
+
+        <div
+          className="animate-unfold rounded-3xl p-6 relative overflow-hidden"
+          style={{ background: "linear-gradient(155deg, #12151C 0%, #0A0C10 100%)", border: `1px solid ${tier.ring}55`, boxShadow: `0 0 60px -15px ${tier.glow}` }}
+        >
+          <div className="absolute -top-10 -right-10 w-40 h-40 rounded-full opacity-20" style={{ background: tier.ring, filter: "blur(40px)" }} />
+          <div className="flex justify-between items-start relative">
+            <Wordmark size="text-lg" />
+            <span className="text-[10px] font-display font-semibold tracking-widest px-2.5 py-1 rounded-full" style={{ color: tier.ring, border: `1px solid ${tier.ring}66` }}>
+              {tier.name.toUpperCase()}
+            </span>
+          </div>
+          <div className="mt-6 relative">
+            <div className="text-white text-lg font-semibold">{member.name}</div>
+            <div className="text-[#6B7686] text-xs font-mono mt-0.5">{member.id}</div>
+          </div>
+          <div className="mt-6 flex items-end justify-between relative">
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-[#6B7686]">Points Balance</div>
+              <div className="tabular text-3xl font-bold text-white mt-0.5">{member.points.toLocaleString()}</div>
+              <div className="text-[11px] text-[#6B7686] mt-0.5">≈ {money(redeemableAed)} AED redeemable</div>
+            </div>
+            {qrUrl && <img src={qrUrl} alt="Fold QR code" className="w-20 h-20 rounded-lg" />}
+          </div>
+        </div>
+
+        {member.points >= REDEEM_THRESHOLD && (
+          <div className="mt-3 text-center text-xs text-[#B08968] bg-[#B08968]/10 border border-[#B08968]/30 rounded-lg py-2">
+            You have enough points to redeem — ask staff at checkout.
+          </div>
+        )}
+
+        <div className="mt-4 grid grid-cols-2 gap-3 text-center">
+          <div className="bg-[#12151C] border border-[#1D222C] rounded-xl p-3">
+            <div className="text-[10px] uppercase tracking-wider text-[#6B7686]">Lifetime Value</div>
+            <div className="tabular text-white font-semibold mt-0.5">{money(member.lifetimeValue)} AED</div>
+          </div>
+          <div className="bg-[#12151C] border border-[#1D222C] rounded-xl p-3">
+            <div className="text-[10px] uppercase tracking-wider text-[#6B7686]">Member Since</div>
+            <div className="text-white font-semibold mt-0.5">{fmtDate(member.createdAt)}</div>
+          </div>
+        </div>
+
+        <button onClick={() => setShowHistory((v) => !v)} className="w-full mt-4 text-left bg-[#12151C] border border-[#1D222C] rounded-xl p-3">
+          <div className="flex justify-between items-center">
+            <span className="text-xs uppercase tracking-wider text-[#6B7686]">Activity</span>
+            <span className="text-[#6B7686] text-xs">{showHistory ? "Hide" : "Show"}</span>
+          </div>
+          {showHistory && (
+            <div className="mt-3 space-y-2 animate-rise max-h-56 overflow-y-auto">
+              {member.history.map((h, i) => (
+                <div key={i} className="text-xs text-[#9AA3B2] flex justify-between gap-2">
+                  <span>{h.text}</span>
+                  <span className="text-[#4A5262] shrink-0 font-mono">{fmtDate(h.t)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </button>
+
+        <p className="text-[10px] text-[#4A5262] mt-6 text-center leading-relaxed">
+          Show this QR code — or just your Fold ID or phone number — to staff to record a purchase or redeem points.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function StaffView({ ctx, onBack }) {
+  const { staffPin } = ctx;
+  const [unlocked, setUnlocked] = useState(false);
+  const [pinInput, setPinInput] = useState("");
+  const [error, setError] = useState("");
+
+  if (!unlocked) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-6">
+        <div className="w-full max-w-xs text-center">
+          <Wordmark />
+          <p className="text-[#6B7686] text-sm mt-2 mb-6">Staff PIN required.</p>
+          <input
+            type="password" inputMode="numeric" autoFocus value={pinInput}
+            onChange={(e) => setPinInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") { if (pinInput === staffPin) setUnlocked(true); else { setError("Incorrect PIN"); setPinInput(""); } } }}
+            placeholder="PIN"
+            className="w-full text-center tracking-[0.5em] bg-[#12151C] border border-[#1D222C] rounded-xl px-4 py-3 text-white placeholder-[#4A5262] focus:outline-none focus:border-[#B08968]/60"
+          />
+          {error && <div className="text-rose-400 text-xs mt-2">{error}</div>}
+          <button
+            onClick={() => { if (pinInput === staffPin) setUnlocked(true); else { setError("Incorrect PIN"); setPinInput(""); } }}
+            className="w-full mt-4 bg-[#B08968] hover:bg-[#8F6B4E] text-[#0A0C10] font-semibold py-3 rounded-xl"
+          >
+            Unlock
+          </button>
+          <button onClick={onBack} className="w-full mt-3 text-[#6B7686] text-xs">← Back</button>
+          <p className="text-[10px] text-[#4A5262] mt-6">Default PIN is 1234 — change it below once you're in.</p>
+        </div>
+      </div>
+    );
+  }
+
+  return <StaffDashboard ctx={ctx} onBack={onBack} />;
+}
+
+function StaffDashboard({ ctx, onBack }) {
+  const { members, recordPurchase, redeemPoints, topUp, sharePoints, shareToday, enroll, staffPin, setStaffPin } = ctx;
+  const [query, setQuery] = useState("");
+  const [selected, setSelected] = useState(null);
+  const [showEnroll, setShowEnroll] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [newPin, setNewPin] = useState("");
+
+  const matches = query.trim()
+    ? members.filter((m) => m.name.toLowerCase().includes(query.toLowerCase()) || m.phone.includes(query) || m.id.toLowerCase().includes(query.toLowerCase()))
+    : [];
+
+  const member = selected ? members.find((m) => m.id === selected.id) : null;
+
+  return (
+    <div className="min-h-screen p-6">
+      <div className="max-w-md mx-auto">
+        <div className="flex justify-between items-center mb-6">
+          <Wordmark size="text-lg" />
+          <div className="flex gap-3 items-center">
+            <button onClick={() => setShowSettings((v) => !v)} className="text-[#6B7686] text-xs">Settings</button>
+            <button onClick={onBack} className="text-[#6B7686] text-xs">Exit</button>
+          </div>
+        </div>
+
+        {showSettings && (
+          <div className="bg-[#12151C] border border-[#1D222C] rounded-xl p-4 mb-4 space-y-2 animate-rise">
+            <div className="text-xs text-[#6B7686]">Change staff PIN</div>
+            <div className="flex gap-2">
+              <input value={newPin} onChange={(e) => setNewPin(e.target.value)} placeholder="New PIN"
+                className="flex-1 bg-[#0A0C10] border border-[#1D222C] rounded-lg px-3 py-2 text-sm text-white placeholder-[#4A5262] focus:outline-none focus:border-[#B08968]/60" />
+              <button onClick={() => { if (newPin.trim()) { setStaffPin(newPin.trim()); setNewPin(""); } }} className="text-xs bg-[#B08968] text-[#0A0C10] font-semibold px-3 rounded-lg">Save</button>
+            </div>
+          </div>
+        )}
+
+        {!member ? (
+          <>
+            <div className="flex gap-2 mb-3">
+              <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search name, phone, or Fold ID..."
+                className="flex-1 bg-[#12151C] border border-[#1D222C] rounded-xl px-4 py-3 text-white placeholder-[#4A5262] focus:outline-none focus:border-[#B08968]/60" />
+            </div>
+            <button onClick={() => setShowEnroll(true)} className="w-full mb-4 text-xs text-[#B08968] bg-[#B08968]/10 border border-[#B08968]/30 rounded-lg py-2">
+              + Enroll New Member
+            </button>
+            {showEnroll && (
+              <div className="mb-4">
+                <EnrollForm ctx={ctx} onDone={(m) => { setSelected(m); setShowEnroll(false); }} onCancel={() => setShowEnroll(false)} />
+              </div>
+            )}
+            <div className="space-y-2">
+              {matches.map((m) => {
+                const t = tierFor(m.lifetimeValue);
+                return (
+                  <button key={m.id} onClick={() => setSelected(m)}
+                    className="w-full flex items-center justify-between bg-[#12151C] border border-[#1D222C] rounded-xl p-3 text-left hover:border-[#B08968]/40">
+                    <div>
+                      <div className="text-white text-sm font-medium">{m.name}</div>
+                      <div className="text-[#6B7686] text-xs">{m.id} · {m.phone}</div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-xs font-semibold" style={{ color: t.ring }}>{t.name}</div>
+                      <div className="tabular text-white text-xs">{m.points.toLocaleString()} pts</div>
+                    </div>
+                  </button>
+                );
+              })}
+              {query.trim() && matches.length === 0 && (
+                <div className="text-center text-sm text-[#6B7686] py-6">No member matches that.</div>
+              )}
+            </div>
+          </>
+        ) : (
+          <MemberActions member={member} allMembers={members} onBack={() => setSelected(null)}
+            recordPurchase={recordPurchase} redeemPoints={redeemPoints} topUp={topUp}
+            sharePoints={sharePoints} shareToday={shareToday} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function MemberActions({ member, allMembers, onBack, recordPurchase, redeemPoints, topUp, sharePoints, shareToday }) {
+  const tier = tierFor(member.lifetimeValue);
+  const [tab, setTab] = useState("purchase");
+  const [amount, setAmount] = useState("");
+  const [toId, setToId] = useState("");
+  const [toast, setToast] = useState("");
+
+  function flash(msg) { setToast(msg); setTimeout(() => setToast(""), 1800); }
+
+  function doPurchase() {
+    const amt = Number(amount);
+    if (!amt || amt <= 0) return;
+    recordPurchase(member.id, amt);
+    setAmount("");
+    flash(`Recorded ${money(amt)} AED — +${Math.round(amt * POINTS_PER_AED_EARNED)} pts`);
+  }
+  function doRedeem() {
+    const amt = Number(amount);
+    const needed = Math.ceil(amt * POINTS_PER_AED_REDEEM);
+    if (!amt || amt <= 0 || needed > member.points) { flash("Not enough points for that amount."); return; }
+    redeemPoints(member.id, amt);
+    setAmount("");
+    flash(`Redeemed ${needed} pts for ${money(amt)} AED off`);
+  }
+  function doTopup() {
+    const amt = Number(amount);
+    if (!amt || amt <= 0) return;
+    topUp(member.id, amt);
+    setAmount("");
+    flash(`Topped up ${money(amt)} AED`);
+  }
+  function doShare() {
+    const amt = Number(amount);
+    const target = allMembers.find((m) => m.id.toLowerCase() === toId.trim().toLowerCase());
+    if (!target) { flash("Recipient Fold ID not found."); return; }
+    if (!amt || amt > member.points) { flash("Not enough points to send that much."); return; }
+    if (shareToday(member) >= SHARE_DAILY_LIMIT) { flash(`Daily transfer limit reached (${SHARE_DAILY_LIMIT}/day).`); return; }
+    sharePoints(member.id, target.id, amt);
+    setAmount(""); setToId("");
+    flash(`Sent ${amt} pts to ${target.name}`);
+  }
+
+  const pointsNeededForRedeem = amount ? Math.ceil(Number(amount) * POINTS_PER_AED_REDEEM) : 0;
+
+  return (
+    <div className="animate-rise">
+      <button onClick={onBack} className="text-[#6B7686] text-xs mb-3">← Search</button>
+      <div className="bg-[#12151C] border rounded-2xl p-4 mb-4" style={{ borderColor: `${tier.ring}55` }}>
+        <div className="flex justify-between items-start">
+          <div>
+            <div className="text-white font-semibold">{member.name}</div>
+            <div className="text-[#6B7686] text-xs font-mono">{member.id} · {member.phone}</div>
+          </div>
+          <span className="text-[10px] font-semibold px-2 py-1 rounded-full" style={{ color: tier.ring, border: `1px solid ${tier.ring}66` }}>{tier.name.toUpperCase()}</span>
+        </div>
+        <div className="tabular text-2xl font-bold text-white mt-3">{member.points.toLocaleString()} <span className="text-xs text-[#6B7686] font-normal">pts</span></div>
+        <div className="text-[11px] text-[#6B7686]">≈ {money(member.points / POINTS_PER_AED_REDEEM)} AED · {money(member.lifetimeValue)} AED lifetime</div>
+      </div>
+
+      <div className="flex gap-1.5 mb-3 flex-wrap">
+        {[["purchase", "Record Purchase"], ["redeem", "Redeem"], ["topup", "Top Up"], ["share", "Send Points"]].map(([id, label]) => (
+          <button key={id} onClick={() => { setTab(id); setAmount(""); }}
+            className={`text-[11px] px-3 py-1.5 rounded-full ${tab === id ? "bg-[#B08968] text-[#0A0C10] font-semibold" : "bg-[#12151C] border border-[#1D222C] text-[#6B7686]"}`}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      <div className="bg-[#12151C] border border-[#1D222C] rounded-xl p-4 space-y-3">
+        {tab === "share" && (
+          <input value={toId} onChange={(e) => setToId(e.target.value)} placeholder="Recipient Fold ID"
+            className="w-full bg-[#0A0C10] border border-[#1D222C] rounded-lg px-3 py-2.5 text-white placeholder-[#4A5262] focus:outline-none focus:border-[#B08968]/60" />
+        )}
+        <input type="number" value={amount} onChange={(e) => setAmount(e.target.value)}
+          placeholder={tab === "share" ? "Points to send" : "Amount (AED)"}
+          className="w-full bg-[#0A0C10] border border-[#1D222C] rounded-lg px-3 py-2.5 text-white placeholder-[#4A5262] focus:outline-none focus:border-[#B08968]/60" />
+
+        {tab === "purchase" && amount && <div className="text-xs text-[#B08968]">Will earn {Math.round(Number(amount) * POINTS_PER_AED_EARNED)} points.</div>}
+        {tab === "redeem" && amount && (
+          <div className={`text-xs ${pointsNeededForRedeem > member.points ? "text-rose-400" : "text-[#B08968]"}`}>
+            Needs {pointsNeededForRedeem} points — {member.name} has {member.points}.
+          </div>
+        )}
+        {tab === "topup" && amount && (
+          <div className="text-xs text-[#B08968]">
+            +{Math.round(Number(amount) * POINTS_PER_AED_EARNED)} pts{topupBonusPct(Number(amount)) > 0 ? ` + ${Math.round(Number(amount) * POINTS_PER_AED_EARNED * topupBonusPct(Number(amount)))} bonus pts (${Math.round(topupBonusPct(Number(amount)) * 100)}%)` : ""}
+          </div>
+        )}
+        {tab === "share" && <div className="text-xs text-[#6B7686]">{SHARE_DAILY_LIMIT - shareToday(member)} of {SHARE_DAILY_LIMIT} transfers left today.</div>}
+
+        <button
+          onClick={tab === "purchase" ? doPurchase : tab === "redeem" ? doRedeem : tab === "topup" ? doTopup : doShare}
+          className="w-full bg-[#B08968] hover:bg-[#8F6B4E] text-[#0A0C10] font-semibold py-2.5 rounded-lg"
+        >
+          {tab === "purchase" ? "Record Purchase" : tab === "redeem" ? "Redeem" : tab === "topup" ? "Top Up" : "Send Points"}
+        </button>
+      </div>
+
+      {toast && <div className="text-center text-xs text-[#B08968] mt-3">{toast}</div>}
+
+      <div className="mt-4">
+        <div className="text-[10px] uppercase tracking-wider text-[#6B7686] mb-1.5">Recent Activity</div>
+        <div className="space-y-1.5 max-h-48 overflow-y-auto">
+          {member.history.slice(0, 15).map((h, i) => (
+            <div key={i} className="text-xs text-[#9AA3B2] flex justify-between gap-2">
+              <span>{h.text}</span>
+              <span className="text-[#4A5262] shrink-0 font-mono">{fmtDateTime(h.t)}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+document.getElementById("loading").remove();
+root.render(<FoldApp />);
+</script>
+</body>
+</html>
