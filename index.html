@@ -131,8 +131,19 @@ function LoadingSync() {
 export default function FoldApp() {
   const [members, setMembers] = useState([]);
   const [staffPin, setStaffPin] = useState("1234");
-  const [mode, setMode] = useState(null);
+  const [mode, setMode] = useState(() => {
+    try { return localStorage.getItem("fold_device_mode") || null; } catch { return null; }
+  });
   const [ready, setReady] = useState(false);
+
+  function chooseMode(m) {
+    try { localStorage.setItem("fold_device_mode", m); } catch {}
+    setMode(m);
+  }
+  function exitMode() {
+    try { localStorage.removeItem("fold_device_mode"); } catch {}
+    setMode(null);
+  }
 
   useEffect(() => {
     const unsub = onSnapshot(membersCol, (snap) => {
@@ -275,9 +286,9 @@ export default function FoldApp() {
   const ctx = { members, staffPin, setStaffPin: updateStaffPin, enroll, recordPurchase, redeemPoints, topUp, sharePoints, shareToday, deleteMember };
 
   if (!ready) return <LoadingSync />;
-  if (!mode) return <Landing onChoose={setMode} />;
-  if (mode === "customer") return <CustomerView ctx={ctx} onBack={() => setMode(null)} />;
-  return <StaffView ctx={ctx} onBack={() => setMode(null)} />;
+  if (!mode) return <Landing onChoose={chooseMode} />;
+  if (mode === "customer") return <CustomerView ctx={ctx} onBack={exitMode} />;
+  return <StaffView ctx={ctx} onBack={exitMode} />;
 }
 
 function Wordmark({ size = "text-2xl" }) {
