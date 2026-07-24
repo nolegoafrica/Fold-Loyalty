@@ -20,7 +20,9 @@
     "react/": "https://esm.sh/react@18.3.1/",
     "react-dom": "https://esm.sh/react-dom@18.3.1",
     "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
-    "qrcode": "https://esm.sh/qrcode@1.5.3"
+    "qrcode": "https://esm.sh/qrcode@1.5.3",
+    "firebase/app": "https://esm.sh/firebase@10.12.2/app",
+    "firebase/firestore": "https://esm.sh/firebase@10.12.2/firestore"
   }
 }
 </script>
@@ -65,6 +67,11 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import ReactDOM from "react-dom/client";
 import QRCode from "qrcode";
+import { initializeApp } from "firebase/app";
+import {
+  getFirestore, collection, doc, onSnapshot, setDoc, updateDoc,
+  increment, arrayUnion, runTransaction,
+} from "firebase/firestore";
 
 const POINTS_PER_AED_EARNED = 1;
 const POINTS_PER_AED_REDEEM = 20;
@@ -97,128 +104,173 @@ function nextFoldId(existing) {
   return "FOLD-" + String(n).padStart(5, "0");
 }
 
-const STORE_KEY = "fold_v1_members";
-const PIN_KEY = "fold_v1_staffpin";
-function loadMembers() {
-  try {
-    const raw = localStorage.getItem(STORE_KEY);
-    if (!raw) return [];
-    return JSON.parse(raw);
-  } catch { return []; }
+const firebaseConfig = {
+  apiKey: "AIzaSyA2FjZdgTG3nuQsc77HK6dnA2c5ZyOJZA4",
+  authDomain: "fold-loyalty.firebaseapp.com",
+  projectId: "fold-loyalty",
+  storageBucket: "fold-loyalty.firebasestorage.app",
+  messagingSenderId: "211972368731",
+  appId: "1:211972368731:web:b1688b8357afd2ddd6927e",
+};
+const firebaseApp = initializeApp(firebaseConfig);
+const db = getFirestore(firebaseApp);
+const membersCol = collection(db, "members");
+const settingsRef = doc(db, "settings", "app");
+
+function historyEntry(text) {
+  return { t: new Date().toISOString(), text };
 }
-function saveMembers(members) {
-  try { localStorage.setItem(STORE_KEY, JSON.stringify(members)); } catch {}
-}
-function loadPin() {
-  try { return localStorage.getItem(PIN_KEY) || "1234"; } catch { return "1234"; }
-}
-function savePin(pin) {
-  try { localStorage.setItem(PIN_KEY, pin); } catch {}
+
+function LoadingSync() {
+  return (
+    <div className="min-h-screen flex items-center justify-center">
+      <div className="text-[#B08968] font-display text-sm tracking-widest">SYNCING…</div>
+    </div>
+  );
 }
 
 export default function FoldApp() {
-  const [members, setMembers] = useState(() => loadMembers());
-  const [staffPin, setStaffPin] = useState(() => loadPin());
+  const [members, setMembers] = useState([]);
+  const [staffPin, setStaffPin] = useState("1234");
   const [mode, setMode] = useState(null);
+  const [ready, setReady] = useState(false);
 
-  useEffect(() => { saveMembers(members); }, [members]);
-  useEffect(() => { savePin(staffPin); }, [staffPin]);
+  useEffect(() => {
+    const unsub = onSnapshot(membersCol, (snap) => {
+      setMembers(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+      setReady(true);
+    });
+    return unsub;
+  }, []);
 
-  function log(member, text) {
-    return { ...member, history: [{ t: new Date().toISOString(), text }, ...member.history] };
+  useEffect(() => {
+    const unsub = onSnapshot(settingsRef, (snap) => {
+      if (snap.exists() && snap.data().staffPin) setStaffPin(snap.data().staffPin);
+    });
+    return unsub;
+  }, []);
+
+  function updateStaffPin(pin) {
+    setDoc(settingsRef, { staffPin: pin }, { merge: true });
   }
 
-  function enroll({ name, phone, birthday, referredBy }) {
+  async function enroll({ name, phone, birthday, referredBy }) {
     const id = nextFoldId(members);
     const member = {
-      id, name, phone, birthday: birthday || null, points: 0, lifetimeValue: 0,
-      referredBy: referredBy || null, lastBirthdayBonusYear: null, sharesSentToday: 0, sharesResetDate: new Date().toDateString(),
-      createdAt: new Date().toISOString(), history: [{ t: new Date().toISOString(), text: "Joined Fold" }],
+      name, phone, birthday: birthday || null, points: 0, lifetimeValue: 0,
+      referredBy: referredBy || null, lastBirthdayBonusYear: null,
+      sharesSentToday: 0, sharesResetDate: new Date().toDateString(),
+      createdAt: new Date().toISOString(), history: [historyEntry("Joined Fold")],
     };
-    let next = [...members, member];
+    await setDoc(doc(db, "members", id), member);
     if (referredBy) {
-      next = next.map((m) => m.id === referredBy
-        ? log({ ...m, points: m.points + REFERRAL_BONUS }, `Referral bonus — ${name} joined using your code — +${REFERRAL_BONUS} pts`)
-        : m);
+      await updateDoc(doc(db, "members", referredBy), {
+        points: increment(REFERRAL_BONUS),
+        history: arrayUnion(historyEntry(`Referral bonus — ${name} joined using your code — +${REFERRAL_BONUS} pts`)),
+      }).catch(() => {});
     }
-    setMembers(next);
-    return member;
+    return { id, ...member };
   }
 
-  function recordPurchase(id, amount) {
-    setMembers((prev) => prev.map((m) => {
-      if (m.id !== id) return m;
-      const earned = Math.round(amount * POINTS_PER_AED_EARNED);
-      const newLifetime = m.lifetimeValue + amount;
-      const oldTier = tierFor(m.lifetimeValue).name;
-      const newTier = tierFor(newLifetime).name;
-      let updated = { ...m, points: m.points + earned, lifetimeValue: newLifetime };
-      updated = log(updated, `Purchase recorded — ${money(amount)} AED — +${earned} pts`);
-      if (newTier !== oldTier) updated = log(updated, `Reached ${newTier} tier`);
-      return updated;
-    }));
+  async function recordPurchase(id, amount) {
+    const m = members.find((x) => x.id === id);
+    if (!m) return false;
+    const earned = Math.round(amount * POINTS_PER_AED_EARNED);
+    const oldTier = tierFor(m.lifetimeValue).name;
+    const newTier = tierFor(m.lifetimeValue + amount).name;
+    const entries = [historyEntry(`Purchase recorded — ${money(amount)} AED — +${earned} pts`)];
+    if (newTier !== oldTier) entries.push(historyEntry(`Reached ${newTier} tier`));
+    await updateDoc(doc(db, "members", id), {
+      points: increment(earned), lifetimeValue: increment(amount), history: arrayUnion(...entries),
+    });
+    return true;
   }
 
-  function redeemPoints(id, aedValue) {
-    setMembers((prev) => prev.map((m) => {
-      if (m.id !== id) return m;
-      const needed = Math.ceil(aedValue * POINTS_PER_AED_REDEEM);
-      if (needed > m.points) return m;
-      return log({ ...m, points: m.points - needed }, `Redeemed ${needed} pts for ${money(aedValue)} AED off`);
-    }));
+  async function redeemPoints(id, aedValue) {
+    const needed = Math.ceil(aedValue * POINTS_PER_AED_REDEEM);
+    const ref = doc(db, "members", id);
+    try {
+      await runTransaction(db, async (tx) => {
+        const snap = await tx.get(ref);
+        if (!snap.exists() || snap.data().points < needed) throw new Error("insufficient");
+        tx.update(ref, {
+          points: increment(-needed),
+          history: arrayUnion(historyEntry(`Redeemed ${needed} pts for ${money(aedValue)} AED off`)),
+        });
+      });
+      return true;
+    } catch {
+      return false;
+    }
   }
 
-  function topUp(id, amount) {
-    setMembers((prev) => prev.map((m) => {
-      if (m.id !== id) return m;
-      const bonusPct = topupBonusPct(amount);
-      const basePoints = Math.round(amount * POINTS_PER_AED_EARNED);
-      const bonusPoints = Math.round(basePoints * bonusPct);
-      const total = basePoints + bonusPoints;
-      return log({ ...m, points: m.points + total }, bonusPct > 0
-        ? `Topped up ${money(amount)} AED — +${basePoints} pts +${bonusPoints} bonus (${Math.round(bonusPct * 100)}%)`
-        : `Topped up ${money(amount)} AED — +${basePoints} pts`);
-    }));
+  async function topUp(id, amount) {
+    const bonusPct = topupBonusPct(amount);
+    const basePoints = Math.round(amount * POINTS_PER_AED_EARNED);
+    const bonusPoints = Math.round(basePoints * bonusPct);
+    const text = bonusPct > 0
+      ? `Topped up ${money(amount)} AED — +${basePoints} pts +${bonusPoints} bonus (${Math.round(bonusPct * 100)}%)`
+      : `Topped up ${money(amount)} AED — +${basePoints} pts`;
+    await updateDoc(doc(db, "members", id), {
+      points: increment(basePoints + bonusPoints), history: arrayUnion(historyEntry(text)),
+    });
+    return true;
   }
 
   function shareToday(m) {
     const today = new Date().toDateString();
     return m.sharesResetDate === today ? m.sharesSentToday : 0;
   }
-  function sharePoints(fromId, toId, amount) {
-    setMembers((prev) => {
-      const from = prev.find((m) => m.id === fromId);
-      if (!from || from.points < amount) return prev;
-      const sentToday = shareToday(from);
-      if (sentToday >= SHARE_DAILY_LIMIT) return prev;
-      const today = new Date().toDateString();
-      return prev.map((m) => {
-        if (m.id === fromId) {
-          return log({ ...m, points: m.points - amount, sharesSentToday: sentToday + 1, sharesResetDate: today }, `Sent ${amount} pts to ${prev.find((x) => x.id === toId)?.name || toId}`);
-        }
-        if (m.id === toId) {
-          return log({ ...m, points: m.points + amount }, `Received ${amount} pts from ${from.name}`);
-        }
-        return m;
+
+  async function sharePoints(fromId, toId, amount) {
+    const fromRef = doc(db, "members", fromId);
+    const toRef = doc(db, "members", toId);
+    try {
+      await runTransaction(db, async (tx) => {
+        const fromSnap = await tx.get(fromRef);
+        const toSnap = await tx.get(toRef);
+        if (!fromSnap.exists() || !toSnap.exists()) throw new Error("not found");
+        const from = fromSnap.data();
+        const to = toSnap.data();
+        const today = new Date().toDateString();
+        const sentToday = from.sharesResetDate === today ? from.sharesSentToday : 0;
+        if (from.points < amount || sentToday >= SHARE_DAILY_LIMIT) throw new Error("blocked");
+        tx.update(fromRef, {
+          points: increment(-amount), sharesSentToday: sentToday + 1, sharesResetDate: today,
+          history: arrayUnion(historyEntry(`Sent ${amount} pts to ${to.name}`)),
+        });
+        tx.update(toRef, {
+          points: increment(amount),
+          history: arrayUnion(historyEntry(`Received ${amount} pts from ${from.name}`)),
+        });
       });
-    });
+      return true;
+    } catch {
+      return false;
+    }
   }
 
+  const birthdayCheckedRef = useRef(false);
   useEffect(() => {
+    if (!ready || birthdayCheckedRef.current) return;
+    birthdayCheckedRef.current = true;
     const now = new Date();
-    setMembers((prev) => prev.map((m) => {
-      if (!m.birthday) return m;
+    members.forEach((m) => {
+      if (!m.birthday) return;
       const b = new Date(m.birthday);
       const isToday = b.getMonth() === now.getMonth() && b.getDate() === now.getDate();
       if (isToday && m.lastBirthdayBonusYear !== now.getFullYear()) {
-        return log({ ...m, points: m.points + BIRTHDAY_BONUS, lastBirthdayBonusYear: now.getFullYear() }, `Happy Birthday! +${BIRTHDAY_BONUS} bonus pts`);
+        updateDoc(doc(db, "members", m.id), {
+          points: increment(BIRTHDAY_BONUS), lastBirthdayBonusYear: now.getFullYear(),
+          history: arrayUnion(historyEntry(`Happy Birthday! +${BIRTHDAY_BONUS} bonus pts`)),
+        });
       }
-      return m;
-    }));
-  }, []);
+    });
+  }, [ready, members]);
 
-  const ctx = { members, setMembers, staffPin, setStaffPin, enroll, recordPurchase, redeemPoints, topUp, sharePoints, shareToday };
+  const ctx = { members, staffPin, setStaffPin: updateStaffPin, enroll, recordPurchase, redeemPoints, topUp, sharePoints, shareToday };
 
+  if (!ready) return <LoadingSync />;
   if (!mode) return <Landing onChoose={setMode} />;
   if (mode === "customer") return <CustomerView ctx={ctx} onBack={() => setMode(null)} />;
   return <StaffView ctx={ctx} onBack={() => setMode(null)} />;
@@ -307,7 +359,7 @@ function EnrollForm({ ctx, onDone, onCancel }) {
   const [form, setForm] = useState({ name: "", phone: "", birthday: "", referredBy: "" });
   const [error, setError] = useState("");
 
-  function submit() {
+  async function submit() {
     if (!form.name.trim() || !form.phone.trim()) { setError("Name and phone are required."); return; }
     if (ctx.members.some((m) => m.phone.replace(/\s/g, "") === form.phone.replace(/\s/g, ""))) {
       setError("That phone number is already on a card.");
@@ -315,7 +367,7 @@ function EnrollForm({ ctx, onDone, onCancel }) {
     }
     const referrer = form.referredBy.trim() ? ctx.members.find((m) => m.id.toLowerCase() === form.referredBy.trim().toLowerCase()) : null;
     if (form.referredBy.trim() && !referrer) { setError("That referral Fold ID wasn't found — leave it blank to skip."); return; }
-    const member = ctx.enroll({ name: form.name.trim(), phone: form.phone.trim(), birthday: form.birthday || null, referredBy: referrer?.id || null });
+    const member = await ctx.enroll({ name: form.name.trim(), phone: form.phone.trim(), birthday: form.birthday || null, referredBy: referrer?.id || null });
     onDone(member);
   }
 
@@ -548,40 +600,49 @@ function MemberActions({ member, allMembers, onBack, recordPurchase, redeemPoint
   const [amount, setAmount] = useState("");
   const [toId, setToId] = useState("");
   const [toast, setToast] = useState("");
+  const toastTimerRef = useRef(null);
 
-  function flash(msg) { setToast(msg); setTimeout(() => setToast(""), 1800); }
+  function flash(msg) {
+    setToast(msg);
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setToast(""), 1800);
+  }
 
-  function doPurchase() {
+  async function doPurchase() {
     const amt = Number(amount);
     if (!amt || amt <= 0) return;
-    recordPurchase(member.id, amt);
     setAmount("");
-    flash(`Recorded ${money(amt)} AED — +${Math.round(amt * POINTS_PER_AED_EARNED)} pts`);
+    flash("Recording…");
+    const ok = await recordPurchase(member.id, amt);
+    flash(ok ? `Recorded ${money(amt)} AED — +${Math.round(amt * POINTS_PER_AED_EARNED)} pts` : "Something went wrong — try again.");
   }
-  function doRedeem() {
+  async function doRedeem() {
     const amt = Number(amount);
     const needed = Math.ceil(amt * POINTS_PER_AED_REDEEM);
     if (!amt || amt <= 0 || needed > member.points) { flash("Not enough points for that amount."); return; }
-    redeemPoints(member.id, amt);
     setAmount("");
-    flash(`Redeemed ${needed} pts for ${money(amt)} AED off`);
+    flash("Redeeming…");
+    const ok = await redeemPoints(member.id, amt);
+    flash(ok ? `Redeemed ${needed} pts for ${money(amt)} AED off` : "Didn't go through — balance may have just changed elsewhere.");
   }
-  function doTopup() {
+  async function doTopup() {
     const amt = Number(amount);
     if (!amt || amt <= 0) return;
-    topUp(member.id, amt);
     setAmount("");
-    flash(`Topped up ${money(amt)} AED`);
+    flash("Topping up…");
+    const ok = await topUp(member.id, amt);
+    flash(ok ? `Topped up ${money(amt)} AED` : "Something went wrong — try again.");
   }
-  function doShare() {
+  async function doShare() {
     const amt = Number(amount);
     const target = allMembers.find((m) => m.id.toLowerCase() === toId.trim().toLowerCase());
     if (!target) { flash("Recipient Fold ID not found."); return; }
     if (!amt || amt > member.points) { flash("Not enough points to send that much."); return; }
     if (shareToday(member) >= SHARE_DAILY_LIMIT) { flash(`Daily transfer limit reached (${SHARE_DAILY_LIMIT}/day).`); return; }
-    sharePoints(member.id, target.id, amt);
     setAmount(""); setToId("");
-    flash(`Sent ${amt} pts to ${target.name}`);
+    flash("Sending…");
+    const ok = await sharePoints(member.id, target.id, amt);
+    flash(ok ? `Sent ${amt} pts to ${target.name}` : "Didn't go through — balance or limit may have just changed.");
   }
 
   const pointsNeededForRedeem = amount ? Math.ceil(Number(amount) * POINTS_PER_AED_REDEEM) : 0;
