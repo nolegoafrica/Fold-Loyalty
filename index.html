@@ -131,8 +131,15 @@ function LoadingSync() {
 export default function FoldApp() {
   const [members, setMembers] = useState([]);
   const [staffPin, setStaffPin] = useState("1234");
+  const refCode = useMemo(() => {
+    try { return new URLSearchParams(window.location.search).get("ref"); } catch { return null; }
+  }, []);
   const [mode, setMode] = useState(() => {
-    try { return localStorage.getItem("fold_device_mode") || null; } catch { return null; }
+    try {
+      const stored = localStorage.getItem("fold_device_mode");
+      if (stored) return stored;
+    } catch {}
+    return refCode ? "customer" : null;
   });
   const [ready, setReady] = useState(false);
 
@@ -287,14 +294,14 @@ export default function FoldApp() {
 
   if (!ready) return <LoadingSync />;
   if (!mode) return <Landing onChoose={chooseMode} />;
-  if (mode === "customer") return <CustomerView ctx={ctx} onBack={exitMode} />;
+  if (mode === "customer") return <CustomerView ctx={ctx} onBack={exitMode} refCode={refCode} />;
   return <StaffView ctx={ctx} onBack={exitMode} />;
 }
 
 function Wordmark({ size = "text-2xl" }) {
   return (
-    <div className={`font-display font-bold tracking-[0.15em] ${size}`}>
-      <span className="text-white">FOL</span><span style={{ color: "#B08968" }}>D</span>
+    <div className={`font-display font-bold tracking-tight ${size}`}>
+      <span className="text-white">fol</span><span style={{ color: "#B08968" }}>d</span>
     </div>
   );
 }
@@ -324,11 +331,11 @@ function Landing({ onChoose }) {
   );
 }
 
-function CustomerView({ ctx, onBack }) {
+function CustomerView({ ctx, onBack, refCode }) {
   const { members, enroll } = ctx;
   const [lookup, setLookup] = useState("");
   const [found, setFound] = useState(null);
-  const [showEnroll, setShowEnroll] = useState(false);
+  const [showEnroll, setShowEnroll] = useState(!!refCode);
 
   function search() {
     const q = lookup.trim().toLowerCase();
@@ -345,7 +352,11 @@ function CustomerView({ ctx, onBack }) {
       <div className="w-full max-w-sm">
         <button onClick={onBack} className="text-[#6B7686] text-xs mb-6">← Back</button>
         <Wordmark />
-        <p className="text-[#6B7686] text-sm mt-2 mb-6">Find your card by phone number or Fold ID.</p>
+        {refCode && showEnroll ? (
+          <p className="text-[#B08968] text-sm mt-2 mb-6">You've been invited to join Fold — welcome!</p>
+        ) : (
+          <p className="text-[#6B7686] text-sm mt-2 mb-6">Find your card by phone number or Fold ID.</p>
+        )}
 
         {!showEnroll ? (
           <div className="space-y-3">
@@ -363,15 +374,15 @@ function CustomerView({ ctx, onBack }) {
             </button>
           </div>
         ) : (
-          <EnrollForm ctx={ctx} onDone={(m) => setFound(m)} onCancel={() => setShowEnroll(false)} />
+          <EnrollForm ctx={ctx} onDone={(m) => setFound(m)} onCancel={() => setShowEnroll(false)} initialReferredBy={refCode} />
         )}
       </div>
     </div>
   );
 }
 
-function EnrollForm({ ctx, onDone, onCancel }) {
-  const [form, setForm] = useState({ name: "", phone: "", birthday: "", referredBy: "" });
+function EnrollForm({ ctx, onDone, onCancel, initialReferredBy }) {
+  const [form, setForm] = useState({ name: "", phone: "", birthday: "", referredBy: initialReferredBy || "" });
   const [error, setError] = useState("");
 
   async function submit() {
@@ -409,12 +420,29 @@ function MemberCard({ member, onBack, onAllBack }) {
   const tier = tierFor(member.lifetimeValue);
   const [qrUrl, setQrUrl] = useState(null);
   const [showHistory, setShowHistory] = useState(false);
+  const [shareMsg, setShareMsg] = useState("");
 
   useEffect(() => {
     QRCode.toDataURL(member.id, { width: 260, margin: 1, color: { dark: "#0A0C10", light: "#FFFFFF" } }).then(setQrUrl);
   }, [member.id]);
 
   const redeemableAed = member.points / POINTS_PER_AED_REDEEM;
+
+  async function handleShare() {
+    const url = `${window.location.origin}${window.location.pathname}?ref=${member.id}`;
+    const text = `Join me on Fold! Sign up with my link and I get ${REFERRAL_BONUS} bonus points: `;
+    if (navigator.share) {
+      try { await navigator.share({ title: "Join Fold", text, url }); } catch {}
+    } else {
+      try {
+        await navigator.clipboard.writeText(text + url);
+        setShareMsg("Invite link copied!");
+      } catch {
+        setShareMsg(url);
+      }
+      setTimeout(() => setShareMsg(""), 3000);
+    }
+  }
 
   return (
     <div className="min-h-screen p-6 flex flex-col items-center">
@@ -482,6 +510,11 @@ function MemberCard({ member, onBack, onAllBack }) {
             </div>
           )}
         </button>
+
+        <button onClick={handleShare} className="w-full mt-4 flex items-center justify-center gap-2 bg-[#B08968]/10 border border-[#B08968]/30 text-[#B08968] text-sm font-medium py-3 rounded-xl">
+          Share &amp; Invite a Friend
+        </button>
+        {shareMsg && <div className="text-center text-xs text-[#B08968] mt-2">{shareMsg}</div>}
 
         <p className="text-[10px] text-[#4A5262] mt-6 text-center leading-relaxed">
           Show this QR code — or just your Fold ID or phone number — to staff to record a purchase or redeem points.
@@ -719,6 +752,16 @@ function MemberActions({ member, allMembers, onBack, recordPurchase, redeemPoint
     onDeleted();
   }
 
+  async function handleShareInvite() {
+    const url = `${window.location.origin}${window.location.pathname}?ref=${member.id}`;
+    const text = `Join me on Fold! Sign up with my link and I get ${REFERRAL_BONUS} bonus points: `;
+    if (navigator.share) {
+      try { await navigator.share({ title: "Join Fold", text, url }); } catch {}
+    } else {
+      try { await navigator.clipboard.writeText(text + url); flash("Invite link copied!"); } catch { flash(url); }
+    }
+  }
+
   function flash(msg) {
     setToast(msg);
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
@@ -773,7 +816,10 @@ function MemberActions({ member, allMembers, onBack, recordPurchase, redeemPoint
             <div className="text-white font-semibold">{member.name}</div>
             <div className="text-[#6B7686] text-xs font-mono">{member.id} · {member.phone}</div>
           </div>
-          <span className="text-[10px] font-semibold px-2 py-1 rounded-full" style={{ color: tier.ring, border: `1px solid ${tier.ring}66` }}>{tier.name.toUpperCase()}</span>
+          <span className="flex items-center gap-2 shrink-0">
+            <button onClick={handleShareInvite} title="Share their invite link" className="text-[#B08968] text-xs">🔗</button>
+            <span className="text-[10px] font-semibold px-2 py-1 rounded-full" style={{ color: tier.ring, border: `1px solid ${tier.ring}66` }}>{tier.name.toUpperCase()}</span>
+          </span>
         </div>
         <div className="tabular text-2xl font-bold text-white mt-3">{member.points.toLocaleString()} <span className="text-xs text-[#6B7686] font-normal">pts</span></div>
         <div className="text-[11px] text-[#6B7686]">≈ {money(member.points / POINTS_PER_AED_REDEEM)} AED · {money(member.lifetimeValue)} AED lifetime</div>
