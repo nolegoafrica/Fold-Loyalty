@@ -1,1 +1,0 @@
-import{t as e}from"./jsx-runtime.js";import{t}from"./ui.js";import{r as n}from"./app.js";var r=e();function i({toast:e}){return(0,r.jsxs)(`div`,{className:`panel stack`,style:{maxWidth:440},children:[(0,r.jsx)(`div`,{className:`panel-title`,style:{marginBottom:0},children:`Your admin password`}),(0,r.jsx)(t,{toast:e,onSubmit:n})]})}export{i as default};
