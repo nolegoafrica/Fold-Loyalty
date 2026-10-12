@@ -1,0 +1,212 @@
+rules_version = '2';
+
+// ---------------------------------------------------------------------------
+// Loyalty Platform: security rules (v2)
+//
+//   platform admin  >  café owner  >  customer
+//
+//   admins/{uid}                         platform admins (created by hand in the console)
+//   owners/{uid}                         café login -> which café it runs (+ phone, must-change-password flag)
+//   invites/{code}                       one-time links, with the plan and days they grant
+//   loginMap/{phone}                     which login "version" a phone currently uses (bumped on password reset)
+//   subscriptions/{cafeId}               PRIVATE to admin: price, note
+//   cafes/{cafeId}                       public profile + status (active/suspended/revoked), plan, activeUntil
+//   cafes/{cafeId}/members/{memberId}    customers (memberId is an unguessable private key)
+//   cafes/{cafeId}/members/{m}/ledger    per-customer activity
+//   cafes/{cafeId}/phones/{phone}        one doc per phone, prevents duplicate cards
+//
+// Customers don't sign in: their card link works because the memberId is a random 24-character key.
+// Only that café's own login, or a platform admin, can LIST its customers.
+// A café can only write while its subscription is active AND its end date hasn't passed; the admin can
+// always write. This is enforced here on the server, not just in the app.
+// ---------------------------------------------------------------------------
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function isAdmin() {
+      return signedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+    function ownerPath() { return /databases/$(database)/documents/owners/$(request.auth.uid); }
+    function isOwner(cafeId) {
+      return signedIn() && exists(ownerPath()) && get(ownerPath()).data.cafeId == cafeId;
+    }
+    function cafeActive(cafeId) {
+      let c = get(/databases/$(database)/documents/cafes/$(cafeId)).data;
+      return c.status == 'active' && (c.activeUntil == null || c.activeUntil > request.time);
+    }
+    function ownerCanWrite(cafeId) { return isOwner(cafeId) && cafeActive(cafeId); }
+    // Staff of this café (while subscribed) or the platform admin.
+    function canManage(cafeId) { return isAdmin() || ownerCanWrite(cafeId); }
+
+    // ---- platform admins: read your own marker only; created manually in the console
+    match /admins/{uid} {
+      allow get: if signedIn() && request.auth.uid == uid;
+      allow list, write: if false;
+    }
+
+    // ---- invites
+    match /invites/{code} {
+      allow get: if true;                       // codes are 20 random chars; needed before sign-up
+      allow list: if isAdmin();
+      allow create: if isAdmin()
+        && request.resource.data.keys().hasOnly(['label', 'plan', 'days', 'used', 'createdAt'])
+        && request.resource.data.used == false
+        && request.resource.data.label is string && request.resource.data.label.size() <= 60
+        && request.resource.data.plan is string && request.resource.data.plan.size() <= 40
+        && (request.resource.data.days == null || (request.resource.data.days is int && request.resource.data.days > 0 && request.resource.data.days <= 3650));
+      allow delete: if isAdmin();
+      // A new café account may burn an unused invite, once, for itself.
+      allow update: if isAdmin() || (
+        signedIn()
+        && resource.data.used == false
+        && request.resource.data.used == true
+        && request.resource.data.usedBy == request.auth.uid
+        && request.resource.data.usedAt == request.time
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['used', 'usedBy', 'usedAt'])
+      );
+    }
+
+    // ---- login version per phone (so the admin can reset a café's password)
+    match /loginMap/{phone} {
+      allow get: if true;                       // needed before sign-in; contains only a small number
+      allow list: if false;
+      allow write: if isAdmin();
+    }
+
+    // ---- private owner record: which café this login runs
+    match /owners/{uid} {
+      allow get: if isAdmin() || (signedIn() && request.auth.uid == uid);
+      allow list: if isAdmin();
+      // Sign-up: created in the same batch as the café and the burned invite.
+      allow create: if isAdmin() || (
+        signedIn() && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['cafeId', 'phone', 'inviteCode', 'mustChangePassword', 'createdAt'])
+        && request.resource.data.cafeId is string && request.resource.data.cafeId.size() >= 20
+        && request.resource.data.phone is string
+        && request.resource.data.phone.matches('^[1-9][0-9]{7,14}$')
+        && request.resource.data.mustChangePassword == false
+        && request.resource.data.createdAt == request.time
+        && !exists(/databases/$(database)/documents/cafes/$(request.resource.data.cafeId))
+        && existsAfter(/databases/$(database)/documents/cafes/$(request.resource.data.cafeId))
+        && get(/databases/$(database)/documents/invites/$(request.resource.data.inviteCode)).data.used == false
+        && getAfter(/databases/$(database)/documents/invites/$(request.resource.data.inviteCode)).data.used == true
+        && getAfter(/databases/$(database)/documents/invites/$(request.resource.data.inviteCode)).data.usedBy == uid
+      );
+      // After a reset the owner clears the flag by choosing their own password. Nothing else is theirs to edit.
+      allow update: if isAdmin() || (
+        signedIn() && request.auth.uid == uid
+        && resource.data.mustChangePassword == true
+        && request.resource.data.mustChangePassword == false
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['mustChangePassword'])
+      );
+      allow delete: if isAdmin();
+    }
+
+    // ---- admin-only subscription details (price, notes)
+    match /subscriptions/{cafeId} {
+      allow read, write: if isAdmin();
+    }
+
+    // ---- café public profile
+    function validCafeProfile(d) {
+      return d.name is string && d.name.size() >= 1 && d.name.size() <= 60
+        && d.nameLower is string && d.nameLower == d.name.lower()
+        && (d.logo == null || (d.logo is string && d.logo.size() < 150000))
+        && d.accent is string && d.accent.matches('^#[0-9a-fA-F]{6}$')
+        && d.countryCode is string && d.countryCode.matches('^[0-9]{1,4}$')
+        && d.rules is map;
+    }
+    function signupInvite() {
+      return get(/databases/$(database)/documents/invites/$(getAfter(/databases/$(database)/documents/owners/$(request.auth.uid)).data.inviteCode)).data;
+    }
+    function signupDatesOk(d) {
+      return (signupInvite().days == null && d.activeUntil == null)
+        || (signupInvite().days != null && d.activeUntil is timestamp
+            && d.activeUntil <= request.time + duration.value(signupInvite().days + 1, 'd'));
+    }
+    match /cafes/{cafeId} {
+      allow get: if true;
+      allow list: if isAdmin();
+      // A new café can set only the plan and length its invite grants.
+      allow create: if signedIn()
+        && existsAfter(/databases/$(database)/documents/owners/$(request.auth.uid))
+        && getAfter(/databases/$(database)/documents/owners/$(request.auth.uid)).data.cafeId == cafeId
+        && request.resource.data.keys().hasOnly(['name', 'nameLower', 'logo', 'accent', 'rules', 'countryCode', 'status', 'plan', 'activeUntil', 'createdAt'])
+        && request.resource.data.status == 'active'
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.plan == signupInvite().plan
+        && signupDatesOk(request.resource.data)
+        && validCafeProfile(request.resource.data);
+      // The owner edits only the look and the rules; status/plan/expiry belong to the admin.
+      allow update: if isAdmin() || (
+        ownerCanWrite(cafeId)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'nameLower', 'logo', 'accent', 'rules', 'countryCode'])
+        && validCafeProfile(request.resource.data)
+      );
+      allow delete: if isAdmin();
+    }
+
+    // ---- customers
+    function validNewMember(cafeId, d) {
+      return d.keys().hasOnly(['cafeId', 'name', 'nameLower', 'phone', 'phoneRev', 'code', 'birthday', 'birthMD',
+                               'points', 'lifetimeValue', 'referredByCode', 'referralPaid', 'lastBirthdayBonusYear', 'createdAt'])
+        && d.keys().hasAll(['cafeId', 'name', 'nameLower', 'phone', 'phoneRev', 'code', 'birthday', 'birthMD',
+                            'points', 'lifetimeValue', 'referredByCode', 'referralPaid', 'lastBirthdayBonusYear', 'createdAt'])
+        && d.cafeId == cafeId
+        && d.name is string && d.name.size() >= 1 && d.name.size() <= 80
+        && d.nameLower == d.name.lower()
+        && d.phone is string && d.phone.matches('^[1-9][0-9]{7,14}$')
+        && d.phoneRev is string && d.phoneRev.size() == d.phone.size()
+        && d.code is string && d.code.size() == 8
+        && (d.birthday == null || (d.birthday is string && d.birthday.size() == 10))
+        && (d.birthMD == null || (d.birthMD is string && d.birthMD.size() == 5))
+        && d.points == 0 && d.lifetimeValue == 0
+        && (d.referredByCode == null || (d.referredByCode is string && d.referredByCode.size() == 8))
+        && d.referralPaid == false && d.lastBirthdayBonusYear == null
+        && d.createdAt == request.time
+        && existsAfter(/databases/$(database)/documents/cafes/$(cafeId)/phones/$(d.phone));
+    }
+    match /cafes/{cafeId}/members/{memberId} {
+      allow get: if true;                                     // the private key is the memberId itself
+      allow list: if isOwner(cafeId) || isAdmin();
+      // Customers join themselves (zero points only); staff and admin can enrol people too.
+      allow create: if memberId.size() >= 20 && (cafeActive(cafeId) || isAdmin()) && validNewMember(cafeId, request.resource.data);
+      // Staff change balances and bookkeeping fields only. Name, phone and code never change.
+      allow update: if isAdmin() || (
+        ownerCanWrite(cafeId)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['points', 'lifetimeValue', 'referralPaid', 'lastBirthdayBonusYear', 'sharesSentToday', 'sharesResetDate'])
+        && request.resource.data.points >= 0
+        && request.resource.data.lifetimeValue >= 0
+      );
+      allow delete: if canManage(cafeId);
+    }
+    // Admin-wide customer list (collection-group query).
+    match /{path=**}/members/{memberId} {
+      allow read: if isAdmin();
+    }
+
+    match /cafes/{cafeId}/members/{memberId}/ledger/{entryId} {
+      allow read: if true;
+      allow create: if canManage(cafeId)
+        && request.resource.data.keys().hasOnly(['t', 'type', 'text', 'delta', 'amount', 'by'])
+        && request.resource.data.t == request.time
+        && (!('by' in request.resource.data) || (request.resource.data.by == 'admin' && isAdmin()));
+      allow delete: if canManage(cafeId);
+      allow update: if false;
+    }
+
+    match /cafes/{cafeId}/phones/{phone} {
+      allow read: if isOwner(cafeId) || isAdmin();
+      allow create: if (cafeActive(cafeId) || isAdmin())
+        && request.resource.data.keys().hasOnly(['memberId', 'createdAt'])
+        && request.resource.data.createdAt == request.time
+        && existsAfter(/databases/$(database)/documents/cafes/$(cafeId)/members/$(request.resource.data.memberId))
+        && getAfter(/databases/$(database)/documents/cafes/$(cafeId)/members/$(request.resource.data.memberId)).data.phone == phone;
+      allow delete: if canManage(cafeId);
+      allow update: if false;
+    }
+
+    // Everything else (including the old "members", "settings", "cafeOwners" collections) is closed.
+  }
+}
