@@ -1,1 +1,0 @@
-import{t as e}from"./jsx-runtime.js";import{n as t,t as n}from"./subscription.js";var r=e();function i({cafe:e}){let{state:i}=t(e);return(0,r.jsx)(`span`,{className:`badge ${i===`active`?`ok`:i===`revoked`?`warn`:`amber`}`,children:n[i]})}export{i as t};
