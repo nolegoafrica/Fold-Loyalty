@@ -3,7 +3,7 @@ rules_version = '2';
 // ---------------------------------------------------------------------------
 // Loyalty Platform: security rules (v2)
 //
-//   platform admin  >  café owner  >  customer
+//   platform admin  >  café owner  >  staff (manager/cashier)  >  customer
 //
 //   admins/{uid}                         platform admins (created by hand in the console)
 //   owners/{uid}                         café login -> which café it runs (+ phone, must-change-password flag)
@@ -37,7 +37,18 @@ service cloud.firestore {
     }
     function ownerCanWrite(cafeId) { return isOwner(cafeId) && cafeActive(cafeId); }
     // Staff of this café (while subscribed) or the platform admin.
-    function canManage(cafeId) { return isAdmin() || ownerCanWrite(cafeId); }
+    function canManage(cafeId) { return isAdmin() || ownerCanWrite(cafeId) || isManager(cafeId); }
+    function staffPath() { return /databases/$(database)/documents/staff/$(request.auth.uid); }
+    function isStaff(cafeId) {
+      return signedIn() && exists(staffPath()) && get(staffPath()).data.cafeId == cafeId && cafeActive(cafeId);
+    }
+    function staffRole(cafeId) {
+      return isStaff(cafeId) ? get(staffPath()).data.role : null;
+    }
+    function isManager(cafeId) { return isStaff(cafeId) && staffRole(cafeId) == 'manager'; }
+    function isCashier(cafeId) { return isStaff(cafeId) && staffRole(cafeId) == 'cashier'; }
+    function canRedeem(cafeId) { return isAdmin() || ownerCanWrite(cafeId) || isManager(cafeId) || isCashier(cafeId); }
+
 
     // ---- platform admins: read your own marker only; created manually in the console
     match /admins/{uid} {
@@ -172,12 +183,13 @@ service cloud.firestore {
       allow list: if isOwner(cafeId) || isAdmin();
       // Customers join themselves (zero points only); staff and admin can enrol people too.
       allow create: if memberId.size() >= 20 && (cafeActive(cafeId) || isAdmin()) && validNewMember(cafeId, request.resource.data);
-      // Staff change balances and bookkeeping fields only. Name, phone and code never change.
+      // Owner / manager / cashier (redeem) can update balances. Name, phone and code never change.
       allow update: if isAdmin() || (
-        ownerCanWrite(cafeId)
+        (ownerCanWrite(cafeId) || isManager(cafeId) || isCashier(cafeId))
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['points', 'lifetimeValue', 'referralPaid', 'lastBirthdayBonusYear', 'sharesSentToday', 'sharesResetDate'])
         && request.resource.data.points >= 0
         && request.resource.data.lifetimeValue >= 0
+        && (isCashier(cafeId) == false || request.resource.data.points <= resource.data.points)
       );
       allow delete: if canManage(cafeId);
     }
@@ -188,7 +200,7 @@ service cloud.firestore {
 
     match /cafes/{cafeId}/members/{memberId}/ledger/{entryId} {
       allow read: if true;
-      allow create: if canManage(cafeId)
+      allow create: if canRedeem(cafeId)
         && request.resource.data.keys().hasOnly(['t', 'type', 'text', 'delta', 'amount', 'by'])
         && request.resource.data.t == request.time
         && (!('by' in request.resource.data) || (request.resource.data.by == 'admin' && isAdmin()));
@@ -207,6 +219,25 @@ service cloud.firestore {
       allow update: if false;
     }
 
+    // ---- staff accounts (limited access, created by café owner)
+    match /staff/{uid} {
+      allow get: if isAdmin() || (signedIn() && request.auth.uid == uid) || (signedIn() && isOwner(resource.data.cafeId));
+      allow list: if isAdmin() || (signedIn() && isOwner(resource.data.cafeId));
+      allow create: if isAdmin() || (
+        isOwner(request.resource.data.cafeId)
+        && request.resource.data.keys().hasOnly(['cafeId', 'name', 'phone', 'role', 'createdAt'])
+        && request.resource.data.role in ['cashier', 'manager']
+        && request.resource.data.createdAt == request.time
+      );
+      allow update: if isAdmin() || (
+        isOwner(resource.data.cafeId)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'role'])
+        && request.resource.data.role in ['cashier', 'manager']
+      );
+      allow delete: if isAdmin() || isOwner(resource.data.cafeId);
+    }
+
     // Everything else (including the old "members", "settings", "cafeOwners" collections) is closed.
   }
 }
+
