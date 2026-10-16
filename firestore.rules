@@ -180,7 +180,7 @@ service cloud.firestore {
     }
     match /cafes/{cafeId}/members/{memberId} {
       allow get: if true;                                     // the private key is the memberId itself
-      allow list: if isOwner(cafeId) || isAdmin();
+      allow list: if isOwner(cafeId) || isAdmin() || isStaff(cafeId);
       // Customers join themselves (zero points only); staff and admin can enrol people too.
       allow create: if memberId.size() >= 20 && (cafeActive(cafeId) || isAdmin()) && validNewMember(cafeId, request.resource.data);
       // Owner / manager / cashier (redeem) can update balances. Name, phone and code never change.
@@ -189,7 +189,6 @@ service cloud.firestore {
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['points', 'lifetimeValue', 'referralPaid', 'lastBirthdayBonusYear', 'sharesSentToday', 'sharesResetDate'])
         && request.resource.data.points >= 0
         && request.resource.data.lifetimeValue >= 0
-        && (isCashier(cafeId) == false || request.resource.data.points <= resource.data.points)
       );
       allow delete: if canManage(cafeId);
     }
