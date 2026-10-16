@@ -8,15 +8,47 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="description" content="Beautiful digital loyalty cards for independent cafés. Earn points, unlock rewards, and enjoy exclusive perks." />
     <meta name="robots" content="noindex" />
-    <title>Loyalty Platform</title>
+    <title>Fold Loyalty</title>
+    <link rel="manifest" href="./manifest.json" />
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%238A5A3C'/%3E%3Cpath d='M32 14l5.6 11.4 12.6 1.8-9.1 8.9 2.1 12.5L32 42.6l-11.2 5.9 2.1-12.5-9.1-8.9 12.6-1.8z' fill='%23fff'/%3E%3C/svg%3E" />
-    <!-- Premium fonts -->
+    <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%238A5A3C'/%3E%3Cpath d='M32 14l5.6 11.4 12.6 1.8-9.1 8.9 2.1 12.5L32 42.6l-11.2 5.9 2.1-12.5-9.1-8.9 12.6-1.8z' fill='%23fff'/%3E%3C/svg%3E" />
+    <!-- Critical fonts only, display=swap, preload Latin -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&display=swap" media="print" onload="this.media='all'">
-    <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Outfit:wght@400;500;600;700&display=swap"></noscript>
+    <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" media="print" onload="this.media='all'">
+    <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap"></noscript>
+    <!-- Arabic deferred -->
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+Arabic:wght@400;600;700&display=swap" media="print" onload="this.media='all'">
     <script type="module" crossorigin src="./assets/app.js"></script>
     <link rel="stylesheet" crossorigin href="./assets/index.css">
+    <script>
+      // Register service worker for caching
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('./sw.js').catch(() => {});
+        });
+      }
+      // Dark mode (non-blocking)
+      if (localStorage.getItem('fold-theme') === 'dark') {
+        document.documentElement.classList.add('dark');
+      }
+      document.addEventListener('DOMContentLoaded', () => {
+        const btn = document.createElement('button');
+        btn.className = 'theme-toggle';
+        btn.setAttribute('aria-label', 'Toggle theme');
+        const dark = document.documentElement.classList.contains('dark');
+        btn.textContent = dark ? '☀️' : '🌙';
+        btn.onclick = () => {
+          document.documentElement.classList.toggle('dark');
+          document.body.classList.toggle('dark');
+          const isDark = document.body.classList.contains('dark');
+          localStorage.setItem('fold-theme', isDark ? 'dark' : 'light');
+          btn.textContent = isDark ? '☀️' : '🌙';
+        };
+        document.body.appendChild(btn);
+      });
+    </script>
   </head>
   <body>
     <div id="root"></div>

@@ -1,0 +1,17 @@
+{
+  "name": "Fold Loyalty",
+  "short_name": "Fold",
+  "description": "Beautiful digital loyalty cards for independent cafés",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F5F2EC",
+  "theme_color": "#8A5A3C",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%238A5A3C'/%3E%3Cpath d='M32 14l5.6 11.4 12.6 1.8-9.1 8.9 2.1 12.5L32 42.6l-11.2 5.9 2.1-12.5-9.1-8.9 12.6-1.8z' fill='%23fff'/%3E%3C/svg%3E",
+      "sizes": "64x64",
+      "type": "image/svg+xml"
+    }
+  ]
+}
