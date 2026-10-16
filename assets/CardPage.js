@@ -60,9 +60,9 @@ function T({param:n}){
 
   // Mock rewards for demo (in real app these come from cafe.rules.rewards)
   const rewards = E.rules?.rewards || [
-    { name: 'Free Coffee', points: 80, icon: '☕' },
-    { name: '20% off pastry', points: 50, icon: '🥐' },
-    { name: 'Birthday drink', points: 0, icon: '🎂' }
+    { name: 'Free Coffee', nameAr: 'قهوة مجانية', points: 80, icon: '☕' },
+    { name: '20% off pastry', nameAr: 'خصم 20% على المعجنات', points: 50, icon: '🥐' },
+    { name: 'Birthday drink', nameAr: 'مشروب عيد الميلاد', points: 0, icon: '🎂' }
   ];
 
   const toggleLang = () => {
@@ -106,9 +106,9 @@ function T({param:n}){
         rewards.map((rw,idx)=>(0,w.jsxs)('div',{className:'reward-card',key:idx,children:[
           (0,w.jsx)('div',{className:'reward-icon',children:rw.icon}),
           (0,w.jsxs)('div',{className:'grow',children:[
-            (0,w.jsx)('div',{style:{fontWeight:650},children:rw.name}),
-            (0,w.jsxs)('div',{className:'small muted',children:[rw.points,' pts']}),
-            rw.points > 0 && (0,w.jsx)('div',{className:'bar dark',style:{marginTop:6},children:(0,w.jsx)('i',{style:{width:`${Math.min(100, Math.round((O.points||0)/rw.points*100))}%`}})})
+            (0,w.jsx)('div',{style:{fontWeight:700,fontSize:16},children:lang==='ar'?(rw.nameAr||rw.name):rw.name}),
+            (0,w.jsxs)('div',{className:'small',style:{opacity:.8,marginTop:2},children:[rw.points,' ',lang==='ar'?'نقطة':'pts']}),
+            rw.points > 0 && (0,w.jsx)('div',{className:'bar dark',style:{marginTop:8},children:(0,w.jsx)('i',{style:{width:`${Math.min(100, Math.round((O.points||0)/rw.points*100))}%`}})})
           ]})
         ]}))
       ]}),
@@ -159,9 +159,9 @@ function T({param:n}){
         ? 'أعجبك المقهى؟ اترك تقييماً على جوجل بعد زيارتك القادمة.'
         : 'Love the café? Leave a Google review after your next visit — it means a lot!'}),
       (0,w.jsxs)('p',{className:'tiny muted',style:{textAlign:'center',lineHeight:1.6},children:[
-        lang==='ar'?'نصيحة: أضف هذه الصفحة إلى الشاشة الرئيسية.':'Tip: add this page to your home screen for one-tap access.',
+        lang==='ar'?'افتح البطاقة كتطبيق كامل من الشاشة الرئيسية.':'Open as a full app from your home screen for the best experience.',
         (0,w.jsx)('br',{}),
-        'Loyalty card by ',s.name
+        'Fold Loyalty · ',s.name
       ]})
     ]}),
     F

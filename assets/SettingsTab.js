@@ -12,4 +12,24 @@ import{F as e,P as t,d as n,f as r,i,l as a,n as o,p as s,y as c}from"./app.js";
   (0,v.jsx)('p',{className:'small muted',children:'Shown at the top of every customer card.'}),
   (0,v.jsx)('textarea',{className:'input',rows:3,placeholder:'e.g. Welcome back! Your next coffee is on us after 8 visits.',value:N.welcomeMessage||'',onChange:e=>P(t=>({...t,welcomeMessage:e.target.value}))})
 ]}),
+
+(0,v.jsxs)('div',{className:'panel stack',children:[
+  (0,v.jsxs)('div',{className:'row between',children:[
+    (0,v.jsx)('div',{className:'panel-title',style:{marginBottom:0},children:'Staff access'}),
+    (0,v.jsx)('span',{className:'pro-badge',children:'PRO'})
+  ]}),
+  (0,v.jsx)('p',{className:'small muted',children:'Create staff accounts with limited access. Cashier: redeem only. Manager: full café controls. Owner retains full control.'}),
+  (0,v.jsxs)('div',{className:'grid2',children:[
+    (0,v.jsx)(s,{label:'Staff name',children:(0,v.jsx)('input',{className:'input',placeholder:'e.g. Sarah',maxLength:40})}),
+    (0,v.jsx)(s,{label:'Phone',children:(0,v.jsx)('input',{className:'input',placeholder:'+971...',type:'tel'})})
+  ]}),
+  (0,v.jsxs)('div',{className:'row',style:{gap:10,marginTop:10},children:[
+    (0,v.jsx)('select',{className:'input',style:{flex:1},children:[
+      (0,v.jsx)('option',{value:'cashier',children:'Cashier (redeem only)'}),
+      (0,v.jsx)('option',{value:'manager',children:'Manager (full access)'})
+    ]}),
+    (0,v.jsx)(r,{sm:!0,variant:'ghost',children:'Add staff'})
+  ]}),
+  (0,v.jsx)('p',{className:'tiny muted',children:'Staff logins are created with a temporary password. Limited roles are enforced in the app and security rules. Available on Pro plans.'})
+]}),
 (0,v.jsx)(r,{block:!0,busy:z,onClick:G,children:`Save changes`}),C===`cafe`&&(0,v.jsxs)(v.Fragment,{children:[(0,v.jsxs)(`div`,{className:`panel stack`,children:[(0,v.jsx)(`div`,{className:`panel-title`,style:{marginBottom:0},children:`Subscription`}),(0,v.jsxs)(`div`,{className:`row between`,children:[(0,v.jsx)(`span`,{className:`muted small`,children:`Plan`}),(0,v.jsx)(`strong`,{children:b.plan||`Standard`})]}),(0,v.jsxs)(`div`,{className:`row between`,children:[(0,v.jsx)(`span`,{className:`muted small`,children:`Status`}),(0,v.jsx)(`strong`,{children:f[t?.state]||`—`})]}),(0,v.jsxs)(`div`,{className:`row between`,children:[(0,v.jsx)(`span`,{className:`muted small`,children:`Valid until`}),(0,v.jsx)(`strong`,{children:t?.until?c(t.until):`No end date`})]}),(0,v.jsx)(`p`,{className:`tiny muted`,children:`To change or renew, contact the platform team.`})]}),(0,v.jsxs)(`div`,{className:`panel stack`,children:[(0,v.jsx)(`div`,{className:`panel-title`,style:{marginBottom:0},children:`Account`}),(0,v.jsxs)(`p`,{className:`small muted`,children:[`Login phone: `,(0,v.jsx)(`strong`,{style:{color:`var(--ink)`},children:V?l(V.phone):`…`})]}),(0,v.jsx)(o,{toast:S,onSubmit:h}),(0,v.jsx)(`p`,{className:`tiny muted`,children:`Forgot your password? Ask the platform team to reset it. They'll give you a temporary one.`})]})]})]})}export{b as default};
